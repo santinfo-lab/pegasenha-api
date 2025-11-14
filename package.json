@@ -1,13 +1,10 @@
 {
   "name": "pegasenha-api",
   "version": "1.0.0",
-  "description": "API do PegaSenha (fila por locais/UBS/comercio)",
-  "main": "index.js",
+  "description": "API serverless do sistema PegaSenha",
+  "private": true,
   "scripts": {
-    "start": "node index.js"
+    "test": "echo \"no tests\""
   },
-  "dependencies": {
-    "express": "^4.19.2",
-    "cors": "^2.8.5"
-  }
+  "dependencies": {}
 }
