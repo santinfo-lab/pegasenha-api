@@ -1,116 +1,141 @@
-// api/fila/[ubs].js
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>PegaSenha – UBS PB Carolina</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f3f4f6;
+      margin: 0;
+      padding: 16px;
+    }
+    .app {
+      max-width: 480px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 1.3rem;
+      margin-bottom: 8px;
+    }
+    .card {
+      background: #ffffff;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+      margin-bottom: 16px;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      font-size: 1rem;
+      border-radius: 999px;
+      border: none;
+      cursor: pointer;
+      background: #2563eb;
+      color: #fff;
+      font-weight: 600;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: wait;
+    }
+    .senha-grande {
+      font-size: 2.4rem;
+      font-weight: 700;
+      text-align: center;
+      margin: 12px 0 4px;
+    }
+    .sucesso {
+      color: #16a34a;
+      font-size: 0.9rem;
+      text-align: center;
+    }
+    .erro {
+      color: #b91c1c;
+      font-size: 0.9rem;
+      text-align: center;
+    }
+    .info {
+      font-size: 0.85rem;
+      color: #4b5563;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="card">
+      <h1>Retirada de Senha – UBS PB Carolina</h1>
+      <p class="info">
+        Toque no botão abaixo para gerar sua senha digital.
+      </p>
+      <button id="btn-pegar-senha" onclick="pegarSenha()">
+        Pegar senha
+      </button>
 
-// Configuração por unidade (UBS, comércio, etc.)
-// Aqui definimos o "offset" do número visível da senha.
-const CONFIG_UBS = {
-  "pb-carolina": { offsetNumero: 0 }, // UBS pública -> numeração normal A001, A002...
-  // Exemplo futuro (não usado agora):
-  // "lanchonete-x": { offsetNumero: 50 }, // 1ª senha visível: A051
-};
+      <div id="resultado" style="margin-top:16px;">
+        <!-- aqui aparece a senha -->
+      </div>
+    </div>
+  </div>
 
-// Estado em memória, compartilhado entre chamadas (enquanto a função estiver viva)
-function getEstadoFila(ubs) {
-  if (!globalThis._pegasenhaFilas) {
-    globalThis._pegasenhaFilas = {};
-  }
+  <script>
+    const API_BASE = "https://pegasenha-api.vercel.app/api";
+    const UBS_SLUG = "pb-carolina";
 
-  if (!globalThis._pegasenhaFilas[ubs]) {
-    globalThis._pegasenhaFilas[ubs] = {
-      proximoIdInterno: 1,
-      fila: [],
-      stats: {
-        total: 0,
-        aguardando: 0,
-        atendidas: 0,
-        ausentes: 0,
-      },
-      ultimas_chamadas: [],
-    };
-  }
+    async function pegarSenha() {
+      const btn = document.getElementById("btn-pegar-senha");
+      const resultadoEl = document.getElementById("resultado");
 
-  return globalThis._pegasenhaFilas[ubs];
-}
+      // limpa mensagens anteriores
+      resultadoEl.innerHTML = "";
+      btn.disabled = true;
+      btn.textContent = "Gerando senha...";
 
-export default function handler(req, res) {
-  const { method, query } = req;
-  const ubs = query.ubs; // vindo da rota /api/fila/[ubs]
+      try {
+        const resp = await fetch(`${API_BASE}/fila/${UBS_SLUG}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            servico_nome: "Atendimento Geral",
+            preferencial: false
+          }),
+        });
 
-  if (!ubs) {
-    return res.status(400).json({
-      ok: false,
-      mensagem: "UBS não informada na rota.",
-    });
-  }
+        if (!resp.ok) {
+          throw new Error("Falha ao gerar senha. Código " + resp.status);
+        }
 
-  const estado = getEstadoFila(ubs);
-  const configUBS = CONFIG_UBS[ubs] || { offsetNumero: 0 };
-  const offsetNumero = Number(configUBS.offsetNumero || 0);
+        const data = await resp.json();
+        if (!data.ok || !data.senha) {
+          throw new Error("Resposta inesperada da API");
+        }
 
-  // -------------------------------------------------------------------
-  // GET /api/fila/[ubs]  -> retorna situação atual da fila
-  // -------------------------------------------------------------------
-  if (method === "GET") {
-    return res.status(200).json({
-      ok: true,
-      ubs,
-      fila: estado.fila,
-      stats: estado.stats,
-      ultimas_chamadas: estado.ultimas_chamadas,
-    });
-  }
+        const senha = data.senha;
 
-  // -------------------------------------------------------------------
-  // POST /api/fila/[ubs] -> cria nova senha (simples, para teste)
-  // -------------------------------------------------------------------
-  if (method === "POST") {
-    // No futuro podemos receber servico_nome, preferencial, etc. do body.
-    // Por enquanto, mantém fixo "Atendimento Geral", preferencial false.
-    const servicoNome =
-      (req.body && req.body.servico_nome) || "Atendimento Geral";
-    const preferencial =
-      req.body && typeof req.body.preferencial !== "undefined"
-        ? !!req.body.preferencial
-        : false;
-
-    const idInterno = estado.proximoIdInterno++;
-
-    // AQUI entra a lógica do offset:
-    const valorVisivel = offsetNumero + idInterno; // ex.: 0 + 1 = 1  -> A001
-    const numeroVisivel = "A" + String(valorVisivel).padStart(3, "0");
-
-    const agora = new Date().toISOString();
-
-    const senha = {
-      id: String(idInterno), // id externo em string
-      id_interno: idInterno,
-      numero: numeroVisivel,
-      servico_nome: servicoNome,
-      status: "aguardando",
-      preferencial,
-      criado_em: agora,
-    };
-
-    estado.fila.push(senha);
-
-    // Atualiza estatísticas simples
-    estado.stats.total++;
-    estado.stats.aguardando++;
-
-    return res.status(201).json({
-      ok: true,
-      mensagem: "Senha criada com sucesso",
-      ubs,
-      senha,
-      stats: estado.stats,
-    });
-  }
-
-  // -------------------------------------------------------------------
-  // Outros métodos não suportados por enquanto
-  // -------------------------------------------------------------------
-  res.setHeader("Allow", ["GET", "POST"]);
-  return res.status(405).json({
-    ok: false,
-    mensagem: `Método ${method} não suportado nesta rota.`,
-  });
-}
+        resultadoEl.innerHTML = `
+          <div class="senha-grande">${senha.numero}</div>
+          <div class="sucesso">Sua senha foi gerada com sucesso.</div>
+          <div class="info">
+            Aguarde ser chamado pelo atendente.
+          </div>
+        `;
+      } catch (erro) {
+        console.error(erro);
+        resultadoEl.innerHTML = `
+          <div class="erro">
+            Não foi possível gerar sua senha agora. Tente novamente em instantes.
+          </div>
+        `;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Pegar senha";
+      }
+    }
+  </script>
+</body>
+</html>
