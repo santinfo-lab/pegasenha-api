@@ -1,162 +1,116 @@
 // api/fila/[ubs].js
-// GET /api/fila/{ubs} → lista fila
-// POST /api/fila/{ubs} → cria nova senha
 
-function getStore() {
-  // Usamos uma variável global em memória para guardar as filas
-  if (!global._pegasenhaStore) {
-    global._pegasenhaStore = {
-      filas: {}, // { [ubs]: { contador: number, senhas: [], ultimasChamadas: [] } }
-      configPorUnidade: {
-        // UBS / órgão público → começa do 1, padrão "limpo"
-        "pb-carolina": {
-          prefixo: "A",
-          inicio_visivel: 1,
-          embaralhar_visivel: false,
-        },
+// Configuração por unidade (UBS, comércio, etc.)
+// Aqui definimos o "offset" do número visível da senha.
+const CONFIG_UBS = {
+  "pb-carolina": { offsetNumero: 0 }, // UBS pública -> numeração normal A001, A002...
+  // Exemplo futuro (não usado agora):
+  // "lanchonete-x": { offsetNumero: 50 }, // 1ª senha visível: A051
+};
 
-        // EXEMPLO: comércio/praça de alimentação (pode editar/apagar)
-        // Aqui a unidade pode querer "começar do 50" para não ficar óbvio o volume
-        "praca-exemplo": {
-          prefixo: "B",
-          inicio_visivel: 50,   // começa mostrando B050
-          embaralhar_visivel: true, // reservado pra futura lógica de embaralhar
-        },
+// Estado em memória, compartilhado entre chamadas (enquanto a função estiver viva)
+function getEstadoFila(ubs) {
+  if (!globalThis._pegasenhaFilas) {
+    globalThis._pegasenhaFilas = {};
+  }
+
+  if (!globalThis._pegasenhaFilas[ubs]) {
+    globalThis._pegasenhaFilas[ubs] = {
+      proximoIdInterno: 1,
+      fila: [],
+      stats: {
+        total: 0,
+        aguardando: 0,
+        atendidas: 0,
+        ausentes: 0,
       },
+      ultimas_chamadas: [],
     };
   }
-  return global._pegasenhaStore;
-}
 
-function ensureFila(ubs) {
-  const store = getStore();
-  if (!store.filas[ubs]) {
-    store.filas[ubs] = {
-      contador: 0,
-      senhas: [],
-      ultimasChamadas: [],
-    };
-  }
-  return store.filas[ubs];
-}
-
-function gerarNumeroVisivel(ubs, contadorInterno) {
-  const store = getStore();
-  const cfgBase = store.configPorUnidade[ubs] || {
-    prefixo: "A",
-    inicio_visivel: 1,
-    embaralhar_visivel: false,
-  };
-
-  const prefixo = cfgBase.prefixo || "A";
-  const inicio = cfgBase.inicio_visivel || 1;
-
-  // Aqui entra o "offset": número visível ≠ contador interno
-  const numeroBase = inicio + contadorInterno - 1;
-
-  // Futuro: se embaralhar_visivel === true, podemos aplicar mais lógica aqui
-  const numeroVisivel = numeroBase;
-
-  return prefixo + String(numeroVisivel).padStart(3, "0");
-}
-
-function calcularStats(senhas) {
-  const stats = {
-    total: senhas.length,
-    aguardando: 0,
-    atendidas: 0,
-    ausentes: 0,
-  };
-
-  for (const s of senhas) {
-    if (s.status === "aguardando") stats.aguardando++;
-    else if (s.status === "atendida") stats.atendidas++;
-    else if (s.status === "ausente") stats.ausentes++;
-  }
-
-  return stats;
+  return globalThis._pegasenhaFilas[ubs];
 }
 
 export default function handler(req, res) {
-  // CORS
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  const { method, query } = req;
+  const ubs = query.ubs; // vindo da rota /api/fila/[ubs]
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
-  const { ubs } = req.query;
   if (!ubs) {
-    return res
-      .status(400)
-      .json({ ok: false, mensagem: "Parâmetro 'ubs' é obrigatório" });
-  }
-
-  const fila = ensureFila(ubs);
-
-  // 👉 GET: apenas lista a fila
-  if (req.method === "GET") {
-    const stats = calcularStats(fila.senhas);
-
-    return res.status(200).json({
-      ok: true,
-      ubs,
-      fila: fila.senhas,
-      stats,
-      ultimas_chamadas: fila.ultimasChamadas,
+    return res.status(400).json({
+      ok: false,
+      mensagem: "UBS não informada na rota.",
     });
   }
 
-  // 👉 POST: cria nova senha
-  if (req.method === "POST") {
-    let body = {};
-    try {
-      body = req.body || {};
-      if (typeof body === "string") {
-        body = JSON.parse(body);
-      }
-    } catch (e) {
-      body = {};
-    }
+  const estado = getEstadoFila(ubs);
+  const configUBS = CONFIG_UBS[ubs] || { offsetNumero: 0 };
+  const offsetNumero = Number(configUBS.offsetNumero || 0);
 
-    const servicoNome = body.servico_nome || "Atendimento Geral";
-    const preferencial = !!body.preferencial;
+  // -------------------------------------------------------------------
+  // GET /api/fila/[ubs]  -> retorna situação atual da fila
+  // -------------------------------------------------------------------
+  if (method === "GET") {
+    return res.status(200).json({
+      ok: true,
+      ubs,
+      fila: estado.fila,
+      stats: estado.stats,
+      ultimas_chamadas: estado.ultimas_chamadas,
+    });
+  }
 
-    // aumenta o contador interno da unidade
-    fila.contador += 1;
-    const idInterno = fila.contador;
+  // -------------------------------------------------------------------
+  // POST /api/fila/[ubs] -> cria nova senha (simples, para teste)
+  // -------------------------------------------------------------------
+  if (method === "POST") {
+    // No futuro podemos receber servico_nome, preferencial, etc. do body.
+    // Por enquanto, mantém fixo "Atendimento Geral", preferencial false.
+    const servicoNome =
+      (req.body && req.body.servico_nome) || "Atendimento Geral";
+    const preferencial =
+      req.body && typeof req.body.preferencial !== "undefined"
+        ? !!req.body.preferencial
+        : false;
 
-    // gera o número visível conforme config da unidade
-    const numero = gerarNumeroVisivel(ubs, idInterno);
-    const agora = new Date();
+    const idInterno = estado.proximoIdInterno++;
 
-    const novaSenha = {
-      id: String(idInterno),
+    // AQUI entra a lógica do offset:
+    const valorVisivel = offsetNumero + idInterno; // ex.: 0 + 1 = 1  -> A001
+    const numeroVisivel = "A" + String(valorVisivel).padStart(3, "0");
+
+    const agora = new Date().toISOString();
+
+    const senha = {
+      id: String(idInterno), // id externo em string
       id_interno: idInterno,
-      numero,
+      numero: numeroVisivel,
       servico_nome: servicoNome,
       status: "aguardando",
       preferencial,
-      criado_em: agora.toISOString(),
+      criado_em: agora,
     };
 
-    fila.senhas.push(novaSenha);
+    estado.fila.push(senha);
 
-    const stats = calcularStats(fila.senhas);
+    // Atualiza estatísticas simples
+    estado.stats.total++;
+    estado.stats.aguardando++;
 
     return res.status(201).json({
       ok: true,
       mensagem: "Senha criada com sucesso",
       ubs,
-      senha: novaSenha,
-      stats,
+      senha,
+      stats: estado.stats,
     });
   }
 
-  // Qualquer outro método não é permitido
-  return res
-    .status(405)
-    .json({ ok: false, mensagem: "Método não permitido" });
+  // -------------------------------------------------------------------
+  // Outros métodos não suportados por enquanto
+  // -------------------------------------------------------------------
+  res.setHeader("Allow", ["GET", "POST"]);
+  return res.status(405).json({
+    ok: false,
+    mensagem: `Método ${method} não suportado nesta rota.`,
+  });
 }
