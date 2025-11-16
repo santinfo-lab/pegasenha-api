@@ -1,141 +1,162 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8" />
-  <title>PegaSenha – UBS PB Carolina</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f3f4f6;
-      margin: 0;
-      padding: 16px;
-    }
-    .app {
-      max-width: 480px;
-      margin: 0 auto;
-    }
-    h1 {
-      font-size: 1.3rem;
-      margin-bottom: 8px;
-    }
-    .card {
-      background: #ffffff;
-      border-radius: 12px;
-      padding: 16px;
-      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
-      margin-bottom: 16px;
-    }
-    button {
-      width: 100%;
-      padding: 12px;
-      font-size: 1rem;
-      border-radius: 999px;
-      border: none;
-      cursor: pointer;
-      background: #2563eb;
-      color: #fff;
-      font-weight: 600;
-    }
-    button:disabled {
-      opacity: 0.6;
-      cursor: wait;
-    }
-    .senha-grande {
-      font-size: 2.4rem;
-      font-weight: 700;
-      text-align: center;
-      margin: 12px 0 4px;
-    }
-    .sucesso {
-      color: #16a34a;
-      font-size: 0.9rem;
-      text-align: center;
-    }
-    .erro {
-      color: #b91c1c;
-      font-size: 0.9rem;
-      text-align: center;
-    }
-    .info {
-      font-size: 0.85rem;
-      color: #4b5563;
-      text-align: center;
-    }
-  </style>
-</head>
-<body>
-  <div class="app">
-    <div class="card">
-      <h1>Retirada de Senha – UBS PB Carolina</h1>
-      <p class="info">
-        Toque no botão abaixo para gerar sua senha digital.
-      </p>
-      <button id="btn-pegar-senha" onclick="pegarSenha()">
-        Pegar senha
-      </button>
+// api/fila/[ubs].js
+// GET /api/fila/{ubs} → lista fila
+// POST /api/fila/{ubs} → cria nova senha
 
-      <div id="resultado" style="margin-top:16px;">
-        <!-- aqui aparece a senha -->
-      </div>
-    </div>
-  </div>
+function getStore() {
+  // Usamos uma variável global em memória para guardar as filas
+  if (!global._pegasenhaStore) {
+    global._pegasenhaStore = {
+      filas: {}, // { [ubs]: { contador: number, senhas: [], ultimasChamadas: [] } }
+      configPorUnidade: {
+        // UBS / órgão público → começa do 1, padrão "limpo"
+        "pb-carolina": {
+          prefixo: "A",
+          inicio_visivel: 1,
+          embaralhar_visivel: false,
+        },
 
-  <script>
-    const API_BASE = "https://pegasenha-api.vercel.app/api";
-    const UBS_SLUG = "pb-carolina";
+        // EXEMPLO: comércio/praça de alimentação (pode editar/apagar)
+        // Aqui a unidade pode querer "começar do 50" para não ficar óbvio o volume
+        "praca-exemplo": {
+          prefixo: "B",
+          inicio_visivel: 50,   // começa mostrando B050
+          embaralhar_visivel: true, // reservado pra futura lógica de embaralhar
+        },
+      },
+    };
+  }
+  return global._pegasenhaStore;
+}
 
-    async function pegarSenha() {
-      const btn = document.getElementById("btn-pegar-senha");
-      const resultadoEl = document.getElementById("resultado");
+function ensureFila(ubs) {
+  const store = getStore();
+  if (!store.filas[ubs]) {
+    store.filas[ubs] = {
+      contador: 0,
+      senhas: [],
+      ultimasChamadas: [],
+    };
+  }
+  return store.filas[ubs];
+}
 
-      // limpa mensagens anteriores
-      resultadoEl.innerHTML = "";
-      btn.disabled = true;
-      btn.textContent = "Gerando senha...";
+function gerarNumeroVisivel(ubs, contadorInterno) {
+  const store = getStore();
+  const cfgBase = store.configPorUnidade[ubs] || {
+    prefixo: "A",
+    inicio_visivel: 1,
+    embaralhar_visivel: false,
+  };
 
-      try {
-        const resp = await fetch(`${API_BASE}/fila/${UBS_SLUG}`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            servico_nome: "Atendimento Geral",
-            preferencial: false
-          }),
-        });
+  const prefixo = cfgBase.prefixo || "A";
+  const inicio = cfgBase.inicio_visivel || 1;
 
-        if (!resp.ok) {
-          throw new Error("Falha ao gerar senha. Código " + resp.status);
-        }
+  // Aqui entra o "offset": número visível ≠ contador interno
+  const numeroBase = inicio + contadorInterno - 1;
 
-        const data = await resp.json();
-        if (!data.ok || !data.senha) {
-          throw new Error("Resposta inesperada da API");
-        }
+  // Futuro: se embaralhar_visivel === true, podemos aplicar mais lógica aqui
+  const numeroVisivel = numeroBase;
 
-        const senha = data.senha;
+  return prefixo + String(numeroVisivel).padStart(3, "0");
+}
 
-        resultadoEl.innerHTML = `
-          <div class="senha-grande">${senha.numero}</div>
-          <div class="sucesso">Sua senha foi gerada com sucesso.</div>
-          <div class="info">
-            Aguarde ser chamado pelo atendente.
-          </div>
-        `;
-      } catch (erro) {
-        console.error(erro);
-        resultadoEl.innerHTML = `
-          <div class="erro">
-            Não foi possível gerar sua senha agora. Tente novamente em instantes.
-          </div>
-        `;
-      } finally {
-        btn.disabled = false;
-        btn.textContent = "Pegar senha";
+function calcularStats(senhas) {
+  const stats = {
+    total: senhas.length,
+    aguardando: 0,
+    atendidas: 0,
+    ausentes: 0,
+  };
+
+  for (const s of senhas) {
+    if (s.status === "aguardando") stats.aguardando++;
+    else if (s.status === "atendida") stats.atendidas++;
+    else if (s.status === "ausente") stats.ausentes++;
+  }
+
+  return stats;
+}
+
+export default function handler(req, res) {
+  // CORS
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
+  const { ubs } = req.query;
+  if (!ubs) {
+    return res
+      .status(400)
+      .json({ ok: false, mensagem: "Parâmetro 'ubs' é obrigatório" });
+  }
+
+  const fila = ensureFila(ubs);
+
+  // 👉 GET: apenas lista a fila
+  if (req.method === "GET") {
+    const stats = calcularStats(fila.senhas);
+
+    return res.status(200).json({
+      ok: true,
+      ubs,
+      fila: fila.senhas,
+      stats,
+      ultimas_chamadas: fila.ultimasChamadas,
+    });
+  }
+
+  // 👉 POST: cria nova senha
+  if (req.method === "POST") {
+    let body = {};
+    try {
+      body = req.body || {};
+      if (typeof body === "string") {
+        body = JSON.parse(body);
       }
+    } catch (e) {
+      body = {};
     }
-  </script>
-</body>
-</html>
+
+    const servicoNome = body.servico_nome || "Atendimento Geral";
+    const preferencial = !!body.preferencial;
+
+    // aumenta o contador interno da unidade
+    fila.contador += 1;
+    const idInterno = fila.contador;
+
+    // gera o número visível conforme config da unidade
+    const numero = gerarNumeroVisivel(ubs, idInterno);
+    const agora = new Date();
+
+    const novaSenha = {
+      id: String(idInterno),
+      id_interno: idInterno,
+      numero,
+      servico_nome: servicoNome,
+      status: "aguardando",
+      preferencial,
+      criado_em: agora.toISOString(),
+    };
+
+    fila.senhas.push(novaSenha);
+
+    const stats = calcularStats(fila.senhas);
+
+    return res.status(201).json({
+      ok: true,
+      mensagem: "Senha criada com sucesso",
+      ubs,
+      senha: novaSenha,
+      stats,
+    });
+  }
+
+  // Qualquer outro método não é permitido
+  return res
+    .status(405)
+    .json({ ok: false, mensagem: "Método não permitido" });
+}
