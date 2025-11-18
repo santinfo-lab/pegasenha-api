@@ -1,8 +1,8 @@
 /*
   PegaSenha - API de Filas por Unidade
   Arquivo: api/fila/[ubs].js
-  Versão: 0.3.0
-  Data: 17/11/2025
+  Versão: 0.3.1
+  Data: 18/11/2025
   Descrição:
     - Mantém a fila em memória por unidade (UBS, governo, comércio).
     - Suporta:
@@ -13,8 +13,8 @@
         • recursos: mesas, itens_pedido, multi_atendente, preferencial
         • regras_fila: prefixo, inicio_visivel, embaralhar_visivel, reset (futuro)
     - Nesta versão:
-        • Adicionada unidade comercial de teste "restaurante-teste".
-        • POST passa a aceitar campos opcionais de mesa:
+        • Unidade comercial de teste "restaurante-teste" com prefixo R e início 50.
+        • POST aceita e armazena campos opcionais de mesa:
           tipo_senha, qtd_pessoas, mesas_solicitadas, mesa_atribuida.
         • PB Carolina permanece com comportamento idêntico (A001, A002...).
 */
@@ -59,7 +59,7 @@ const CONFIG_UNIDADES = {
       reset_diario: true,
       horario_reset: "23:59",
       prefixo: "R",
-      inicio_visivel: 50,    // começa em R050
+      inicio_visivel: 50,    // deve começar em R050
       embaralhar_visivel: false,
     },
   },
@@ -123,7 +123,8 @@ function gerarNumeroVisivel(ubs, contadorInterno) {
   const regras = cfg.regras_fila || {};
 
   const prefixo = regras.prefixo || "A";
-  const inicio = typeof regras.inicio_visivel === "number" ? regras.inicio_visivel : 1;
+  const inicio =
+    typeof regras.inicio_visivel === "number" ? regras.inicio_visivel : 1;
 
   // Offset simples → número visível != id interno
   const numeroBase = inicio + contadorInterno - 1;
@@ -211,7 +212,7 @@ export default function handler(req, res) {
     const servicoNome = body.servico_nome || "Atendimento Geral";
     const preferencial = !!body.preferencial;
 
-    // Campos comerciais opcionais (por enquanto só armazenados, sem lógica extra)
+    // Campos comerciais opcionais (por enquanto só armazenados)
     const tipoSenhaBody = body.tipo_senha || null;
     const qtdPessoasBody =
       typeof body.qtd_pessoas === "number" ? body.qtd_pessoas : null;
