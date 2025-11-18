@@ -1,3 +1,14 @@
+/*
+  PegaSenha - Configuração do Projeto (API)
+  Arquivo: package.json
+  Versão: 0.1.0
+  Data: 16/11/2025
+  Descrição:
+    - Configuração inicial do projeto de API serverless na Vercel.
+    - Mantém a estrutura mínima de dependências e scripts.
+    - Versão inicial, sem dependências externas.
+*/
+
 {
   "name": "pegasenha-api",
   "version": "1.0.0",
