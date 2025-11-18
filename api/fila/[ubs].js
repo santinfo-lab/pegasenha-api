@@ -1,26 +1,41 @@
-// api/fila/[ubs].js
-// GET /api/fila/{ubs} → lista fila
-// POST /api/fila/{ubs} → cria nova senha
+/*
+  PegaSenha - API de Filas por Unidade
+  Arquivo: api/fila/[ubs].js
+  Versão: 0.1.0
+  Data: 16/11/2025
+  Descrição:
+    - Implementa a fila em memória por unidade (UBS ou comércio).
+    - Suporta:
+        • GET  /api/fila/{ubs} → lista fila
+        • POST /api/fila/{ubs} → cria nova senha
+    - Configuração por unidade: prefixo, início visível e opção futura de embaralhamento.
+    - Mantém contador interno e número visível (com offset configurável).
+    - Estatísticas calculadas dinamicamente.
+    - Suporte a CORS.
+*/
 
+//
+// 1. Armazena estado global em memória da função serverless
+//
 function getStore() {
-  // Usamos uma variável global em memória para guardar as filas
   if (!global._pegasenhaStore) {
     global._pegasenhaStore = {
       filas: {}, // { [ubs]: { contador: number, senhas: [], ultimasChamadas: [] } }
+
+      // Configuração específica por unidade
       configPorUnidade: {
-        // UBS / órgão público → começa do 1, padrão "limpo"
+        // UBS (padrão) → numeração começa limpa (A001, A002…)
         "pb-carolina": {
           prefixo: "A",
           inicio_visivel: 1,
           embaralhar_visivel: false,
         },
 
-        // EXEMPLO: comércio/praça de alimentação (pode editar/apagar)
-        // Aqui a unidade pode querer "começar do 50" para não ficar óbvio o volume
+        // Exemplo futuro para comércio (mantido apenas como referência)
         "praca-exemplo": {
           prefixo: "B",
-          inicio_visivel: 50,   // começa mostrando B050
-          embaralhar_visivel: true, // reservado pra futura lógica de embaralhar
+          inicio_visivel: 50,    // Exemplo: começa em B050
+          embaralhar_visivel: true, // Embaralhar será tratado futuramente
         },
       },
     };
@@ -28,6 +43,9 @@ function getStore() {
   return global._pegasenhaStore;
 }
 
+//
+// 2. Garante que a fila de uma unidade exista
+//
 function ensureFila(ubs) {
   const store = getStore();
   if (!store.filas[ubs]) {
@@ -40,6 +58,9 @@ function ensureFila(ubs) {
   return store.filas[ubs];
 }
 
+//
+// 3. Gera o número visível (A001, A051 etc.) baseado na config da unidade
+//
 function gerarNumeroVisivel(ubs, contadorInterno) {
   const store = getStore();
   const cfgBase = store.configPorUnidade[ubs] || {
@@ -51,15 +72,18 @@ function gerarNumeroVisivel(ubs, contadorInterno) {
   const prefixo = cfgBase.prefixo || "A";
   const inicio = cfgBase.inicio_visivel || 1;
 
-  // Aqui entra o "offset": número visível ≠ contador interno
+  // Offset simples → número visível != id interno
   const numeroBase = inicio + contadorInterno - 1;
 
-  // Futuro: se embaralhar_visivel === true, podemos aplicar mais lógica aqui
+  // Futuro: se embaralhar_visivel=true, aplicar algoritmo de embaralhamento
   const numeroVisivel = numeroBase;
 
   return prefixo + String(numeroVisivel).padStart(3, "0");
 }
 
+//
+// 4. Calcula estatísticas simples da fila
+//
 function calcularStats(senhas) {
   const stats = {
     total: senhas.length,
@@ -77,17 +101,22 @@ function calcularStats(senhas) {
   return stats;
 }
 
+//
+// 5. Handler principal (GET lista fila, POST cria senha)
+//
 export default function handler(req, res) {
-  // CORS
+  // Permite acesso de qualquer origem (importante para o front)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
+  // Pré-flight request (CORS)
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
   const { ubs } = req.query;
+
   if (!ubs) {
     return res
       .status(400)
@@ -96,7 +125,9 @@ export default function handler(req, res) {
 
   const fila = ensureFila(ubs);
 
-  // 👉 GET: apenas lista a fila
+  //
+  // GET → retorna situação atual da fila
+  //
   if (req.method === "GET") {
     const stats = calcularStats(fila.senhas);
 
@@ -109,7 +140,9 @@ export default function handler(req, res) {
     });
   }
 
-  // 👉 POST: cria nova senha
+  //
+  // POST → cria nova senha
+  //
   if (req.method === "POST") {
     let body = {};
     try {
@@ -124,11 +157,11 @@ export default function handler(req, res) {
     const servicoNome = body.servico_nome || "Atendimento Geral";
     const preferencial = !!body.preferencial;
 
-    // aumenta o contador interno da unidade
+    // Incrementa contador interno
     fila.contador += 1;
     const idInterno = fila.contador;
 
-    // gera o número visível conforme config da unidade
+    // Gera número visível (A001, B050...)
     const numero = gerarNumeroVisivel(ubs, idInterno);
     const agora = new Date();
 
@@ -155,7 +188,9 @@ export default function handler(req, res) {
     });
   }
 
-  // Qualquer outro método não é permitido
+  //
+  // Demais métodos não são permitidos por enquanto
+  //
   return res
     .status(405)
     .json({ ok: false, mensagem: "Método não permitido" });
