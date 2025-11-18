@@ -1,50 +1,101 @@
 /*
   PegaSenha - API de Filas por Unidade
   Arquivo: api/fila/[ubs].js
-  Versão: 0.1.0
-  Data: 16/11/2025
+  Versão: 0.2.0
+  Data: 17/11/2025
   Descrição:
-    - Implementa a fila em memória por unidade (UBS ou comércio).
+    - Mantém a fila em memória por unidade (UBS, governo, comércio).
     - Suporta:
         • GET  /api/fila/{ubs} → lista fila
         • POST /api/fila/{ubs} → cria nova senha
-    - Configuração por unidade: prefixo, início visível e opção futura de embaralhamento.
-    - Mantém contador interno e número visível (com offset configurável).
-    - Estatísticas calculadas dinamicamente.
-    - Suporte a CORS.
+    - Substitui configPorUnidade por CONFIG_UNIDADES:
+        • segmento: "ubs" | "governo" | "comercial"
+        • recursos: mesas, itens_pedido, multi_atendente, preferencial (ainda não usados)
+        • regras_fila: prefixo, inicio_visivel, embaralhar_visivel, reset (para futuro)
+    - Para a UBS PB Carolina, o comportamento permanece idêntico (A001, A002, ...).
 */
 
 //
-// 1. Armazena estado global em memória da função serverless
+// 1. Configuração por unidade (UBS, governo, comércio)
+//
+const CONFIG_UNIDADES = {
+  "pb-carolina": {
+    nome: "UBS PB Carolina",
+    segmento: "ubs", // "ubs" | "governo" | "comercial"
+
+    recursos: {
+      mesas: false,
+      itens_pedido: false,
+      multi_atendente: false,
+      preferencial: true,
+    },
+
+    regras_fila: {
+      reset_diario: true,
+      horario_reset: "18:00",
+      prefixo: "A",
+      inicio_visivel: 1,
+      embaralhar_visivel: false,
+    },
+  },
+
+  // Exemplo futuro de unidade comercial (apenas referência, não usada agora):
+  "restaurante-exemplo": {
+    nome: "Restaurante Exemplo",
+    segmento: "comercial",
+    recursos: {
+      mesas: true,
+      itens_pedido: true,
+      multi_atendente: true,
+      preferencial: false,
+    },
+    regras_fila: {
+      reset_diario: true,
+      horario_reset: "23:59",
+      prefixo: "R",
+      inicio_visivel: 50, // Ex.: começa em R050
+      embaralhar_visivel: false,
+    },
+  },
+};
+
+// Config padrão caso a unidade não esteja listada explicitamente
+const CONFIG_PADRAO = {
+  nome: "Unidade Padrão",
+  segmento: "comercial",
+  recursos: {
+    mesas: false,
+    itens_pedido: false,
+    multi_atendente: false,
+    preferencial: false,
+  },
+  regras_fila: {
+    reset_diario: true,
+    horario_reset: "18:00",
+    prefixo: "A",
+    inicio_visivel: 1,
+    embaralhar_visivel: false,
+  },
+};
+
+function getConfigUnidade(ubs) {
+  return CONFIG_UNIDADES[ubs] || CONFIG_PADRAO;
+}
+
+//
+// 2. Armazena estado global em memória da função serverless
 //
 function getStore() {
   if (!global._pegasenhaStore) {
     global._pegasenhaStore = {
       filas: {}, // { [ubs]: { contador: number, senhas: [], ultimasChamadas: [] } }
-
-      // Configuração específica por unidade
-      configPorUnidade: {
-        // UBS (padrão) → numeração começa limpa (A001, A002…)
-        "pb-carolina": {
-          prefixo: "A",
-          inicio_visivel: 1,
-          embaralhar_visivel: false,
-        },
-
-        // Exemplo futuro para comércio (mantido apenas como referência)
-        "praca-exemplo": {
-          prefixo: "B",
-          inicio_visivel: 50,    // Exemplo: começa em B050
-          embaralhar_visivel: true, // Embaralhar será tratado futuramente
-        },
-      },
     };
   }
   return global._pegasenhaStore;
 }
 
 //
-// 2. Garante que a fila de uma unidade exista
+// 3. Garante que a fila de uma unidade exista
 //
 function ensureFila(ubs) {
   const store = getStore();
@@ -59,30 +110,26 @@ function ensureFila(ubs) {
 }
 
 //
-// 3. Gera o número visível (A001, A051 etc.) baseado na config da unidade
+// 4. Gera o número visível (A001, R050 etc.) baseado na config da unidade
 //
 function gerarNumeroVisivel(ubs, contadorInterno) {
-  const store = getStore();
-  const cfgBase = store.configPorUnidade[ubs] || {
-    prefixo: "A",
-    inicio_visivel: 1,
-    embaralhar_visivel: false,
-  };
+  const cfg = getConfigUnidade(ubs);
+  const regras = cfg.regras_fila || {};
 
-  const prefixo = cfgBase.prefixo || "A";
-  const inicio = cfgBase.inicio_visivel || 1;
+  const prefixo = regras.prefixo || "A";
+  const inicio = typeof regras.inicio_visivel === "number" ? regras.inicio_visivel : 1;
 
   // Offset simples → número visível != id interno
   const numeroBase = inicio + contadorInterno - 1;
 
-  // Futuro: se embaralhar_visivel=true, aplicar algoritmo de embaralhamento
+  // Futuro: se regras.embaralhar_visivel === true, aplicar algoritmo de embaralhamento
   const numeroVisivel = numeroBase;
 
   return prefixo + String(numeroVisivel).padStart(3, "0");
 }
 
 //
-// 4. Calcula estatísticas simples da fila
+// 5. Calcula estatísticas simples da fila
 //
 function calcularStats(senhas) {
   const stats = {
@@ -102,15 +149,14 @@ function calcularStats(senhas) {
 }
 
 //
-// 5. Handler principal (GET lista fila, POST cria senha)
+// 6. Handler principal (GET lista fila, POST cria senha)
 //
 export default function handler(req, res) {
-  // Permite acesso de qualquer origem (importante para o front)
+  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // Pré-flight request (CORS)
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
@@ -161,7 +207,7 @@ export default function handler(req, res) {
     fila.contador += 1;
     const idInterno = fila.contador;
 
-    // Gera número visível (A001, B050...)
+    // Gera número visível baseado nas regras da unidade
     const numero = gerarNumeroVisivel(ubs, idInterno);
     const agora = new Date();
 
