@@ -6,5 +6,9 @@
   "scripts": {
     "test": "echo \"no tests\""
   },
-  "dependencies": {}
+  "dependencies": {},
+  "pegasenhaMeta": {
+    "versao_codigo": "2025-11-18-001",
+    "comentario": "Controle básico de filas por UBS e tipo restaurante-teste."
+  }
 }
