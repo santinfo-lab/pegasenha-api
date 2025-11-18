@@ -1,22 +1,20 @@
 /*
   PegaSenha - API de Filas por Unidade
   Arquivo: api/fila/[ubs].js
-  Versão: 0.3.1
+  Versão: 0.4.0
   Data: 18/11/2025
   Descrição:
     - Mantém a fila em memória por unidade (UBS, governo, comércio).
     - Suporta:
         • GET  /api/fila/{ubs} → lista fila
         • POST /api/fila/{ubs} → cria nova senha
-    - CONFIG_UNIDADES:
+    - Usa CONFIG_UNIDADES para segmentar:
         • segmento: "ubs" | "governo" | "comercial"
         • recursos: mesas, itens_pedido, multi_atendente, preferencial
-        • regras_fila: prefixo, inicio_visivel, embaralhar_visivel, reset (futuro)
-    - Nesta versão:
-        • Unidade comercial de teste "restaurante-teste" com prefixo R e início 50.
-        • POST aceita e armazena campos opcionais de mesa:
-          tipo_senha, qtd_pessoas, mesas_solicitadas, mesa_atribuida.
-        • PB Carolina permanece com comportamento idêntico (A001, A002...).
+        • regras_fila: prefixo, inicio_visivel, embaralhar_visivel
+    - Integração:
+        • Global store: global._pegasenhaStore = { filas: {}, mesas: {} }
+        • Mesas são gerenciadas em api/mesas/[ubs].js (outro arquivo).
 */
 
 //
@@ -25,7 +23,7 @@
 const CONFIG_UNIDADES = {
   "pb-carolina": {
     nome: "UBS PB Carolina",
-    segmento: "ubs", // "ubs" | "governo" | "comercial"
+    segmento: "ubs",
 
     recursos: {
       mesas: false,
@@ -59,7 +57,7 @@ const CONFIG_UNIDADES = {
       reset_diario: true,
       horario_reset: "23:59",
       prefixo: "R",
-      inicio_visivel: 50,    // deve começar em R050
+      inicio_visivel: 50,    // começa em R050
       embaralhar_visivel: false,
     },
   },
@@ -90,12 +88,21 @@ function getConfigUnidade(ubs) {
 
 //
 // 2. Armazena estado global em memória da função serverless
+//    Estrutura: { filas: { [ubs]: {...} }, mesas: { [ubs]: {...} } }
 //
 function getStore() {
   if (!global._pegasenhaStore) {
     global._pegasenhaStore = {
-      filas: {}, // { [ubs]: { contador: number, senhas: [], ultimasChamadas: [] } }
+      filas: {},
+      mesas: {},
     };
+  } else {
+    if (!global._pegasenhaStore.filas) {
+      global._pegasenhaStore.filas = {};
+    }
+    if (!global._pegasenhaStore.mesas) {
+      global._pegasenhaStore.mesas = {};
+    }
   }
   return global._pegasenhaStore;
 }
