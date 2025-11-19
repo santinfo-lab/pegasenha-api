@@ -2,122 +2,54 @@
   PegaSenha - API de Filas por Unidade
   Arquivo: api/fila/[ubs].js
 
-  Versão: 0.6.0
+  Versão: 0.6.1
   Data: 19/11/2025
 
   Histórico de versões (resumo):
   - 0.4.x / 0.5.x – Estrutura básica de filas por unidade (UBS, governo, comércio),
-    suporte a status, tipo_senha, qtd_pessoas, mesas, etc.
-  - 0.6.0 – Ajuste no formato do número visível da senha para modo restaurante:
-    • Senha simples (sem mesa): RNNN (ex.: R035)
-    • Senha com mesa (qtd_pessoas > 0): {lugares}RNNN (ex.: 4R052)
-
-  Descrição:
-    - Mantém a fila em memória por unidade (UBS, governo, comércio).
-    - Endpoints:
-        • GET    /api/fila/{ubs}           → lista fila
-        • POST   /api/fila/{ubs}           → cria nova senha
-        • PATCH  /api/fila/{ubs}           → atualiza status de uma senha
-    - Usa CONFIG_UNIDADES para segmentar:
-        • segmento: "ubs" | "governo" | "comercial"
-        • recursos: mesas, itens_pedido, multi_atendente, preferencial
-        • regras_fila: prefixo, inicio_visivel, embaralhar_visivel
-    - Integra:
-        • global._pegasenhaStore = { filas: {}, mesas: {} }
+    suporte a status, tipo_senha, qtd_pessoas, etc.
+  - 0.6.0 – Tentativa de refatoração maior (incluindo PATCH e store separado).
+  - 0.6.1 – Retorno à estrutura simplificada e estável (GET/POST), mantendo:
+      • Formato do número visível:
+          - Senha simples (sem mesa): RNNN (ex.: R035)
+          - Senha com mesa (qtd_pessoas > 0 em unidade restaurante): {lugares}RNNN (ex.: 4R052)
 */
 
-//
-// 1. Configuração por unidade (UBS, governo, comércio)
-//
-const CONFIG_UNIDADES = {
-  "pb-carolina": {
-    nome: "UBS PB Carolina",
-    segmento: "ubs",
-
-    recursos: {
-      mesas: false,
-      itens_pedido: false,
-      multi_atendente: false,
-      preferencial: true,
-    },
-
-    regras_fila: {
-      reset_diario: true,
-      horario_reset: "18:00",
-      prefixo: "A",
-      inicio_visivel: 1,
-      embaralhar_visivel: false,
-    },
-  },
-
-  // Unidade comercial de teste (modo restaurante)
-  "restaurante-teste": {
-    nome: "Restaurante de Teste",
-    segmento: "comercial",
-
-    recursos: {
-      mesas: true,           // usa filas para MESAS
-      itens_pedido: false,   // itens de pedido ainda não ativados
-      multi_atendente: true,
-      preferencial: false,
-    },
-
-    regras_fila: {
-      reset_diario: true,
-      horario_reset: "23:59",
-      prefixo: "R",
-      inicio_visivel: 50,    // começa em R050
-      embaralhar_visivel: false,
-    },
-  },
-};
-
-// Config padrão caso a unidade não esteja listada explicitamente
-const CONFIG_PADRAO = {
-  nome: "Unidade Padrão",
-  segmento: "comercial",
-  recursos: {
-    mesas: false,
-    itens_pedido: false,
-    multi_atendente: false,
-    preferencial: false,
-  },
-  regras_fila: {
-    reset_diario: true,
-    horario_reset: "18:00",
-    prefixo: "A",
-    inicio_visivel: 1,
-    embaralhar_visivel: false,
-  },
-};
-
-function getConfigUnidade(ubs) {
-  return CONFIG_UNIDADES[ubs] || CONFIG_PADRAO;
-}
-
-//
-// 2. Store global em memória: { filas: { [ubs]: {...} }, mesas: { [ubs]: {...} } }
-//
 function getStore() {
+  // Usamos uma variável global em memória para guardar as filas e config
   if (!global._pegasenhaStore) {
     global._pegasenhaStore = {
-      filas: {},
-      mesas: {},
+      filas: {}, // { [ubs]: { contador: number, senhas: [], ultimasChamadas: [] } }
+      configPorUnidade: {
+        // UBS / órgãos públicos
+        "pb-carolina": {
+          prefixo: "A",
+          inicio_visivel: 1,
+          embaralhar_visivel: false,
+          segmento: "ubs",
+          recursos: {
+            mesas: false,
+            preferencial: true,
+          },
+        },
+
+        // Unidade comercial de teste (restaurante)
+        "restaurante-teste": {
+          prefixo: "R",
+          inicio_visivel: 50,   // começa do 50 (R050)
+          embaralhar_visivel: false,
+          segmento: "comercial",
+          recursos: {
+            mesas: true,        // usa mesas
+            preferencial: false,
+          },
+        },
+      },
     };
-  } else {
-    if (!global._pegasenhaStore.filas) {
-      global._pegasenhaStore.filas = {};
-    }
-    if (!global._pegasenhaStore.mesas) {
-      global._pegasenhaStore.mesas = {};
-    }
   }
   return global._pegasenhaStore;
 }
 
-//
-// 3. Garante que a fila de uma unidade exista
-//
 function ensureFila(ubs) {
   const store = getStore();
   if (!store.filas[ubs]) {
@@ -130,30 +62,169 @@ function ensureFila(ubs) {
   return store.filas[ubs];
 }
 
-//
-// 4. Gera o número visível (A001, R050, 4R052 etc.)
-//    Regra confirmada pelo Paulo:
-//    - Senha simples (sem mesa): RNNN (ex.: R035)
-//    - Senha com mesa (qtd_pessoas > 0 em unidade comercial com mesas): {lugares}RNNN (ex.: 4R052)
-//
+// Gera o número visível da senha
+// Regra confirmada:
+// - Senha simples (sem mesa): RNNN (ex.: R035)
+// - Senha com mesa (qtd_pessoas > 0 em unidade comercial com mesas): {lugares}RNNN (ex.: 4R052)
 function gerarNumeroVisivel(ubs, contadorInterno, qtdPessoas) {
-  const cfg = getConfigUnidade(ubs);
-  const regras = cfg.regras_fila || {};
-  const recursos = cfg.recursos || {};
+  const store = getStore();
+  const cfgBase = store.configPorUnidade[ubs] || {
+    prefixo: "A",
+    inicio_visivel: 1,
+    embaralhar_visivel: false,
+    segmento: "comercial",
+    recursos: { mesas: false },
+  };
 
-  const prefixo = regras.prefixo || "A";
-  const inicio =
-    typeof regras.inicio_visivel === "number" ? regras.inicio_visivel : 1;
+  const prefixo = cfgBase.prefixo || "A";
+  const inicio = cfgBase.inicio_visivel || 1;
 
-  // Offset simples → número sequencial
   const numeroBase = inicio + contadorInterno - 1;
   const numeroSequencial = String(numeroBase).padStart(3, "0");
 
-  // Verifica se esta unidade é "comercial" com mesas ativas
+  const recursos = cfgBase.recursos || {};
+  const segmento = cfgBase.segmento || "comercial";
+
   const podeUsarMesa =
-    cfg.segmento === "comercial" &&
+    segmento === "comercial" &&
     recursos.mesas === true &&
     typeof qtdPessoas === "number" &&
     qtdPessoas > 0;
 
-  // Se for mesa (qtd_pessoas > 0): {lugares}{prefixo}{NNN}, ex.: 4R052
+  if (podeUsarMesa) {
+    // Ex.: 4R052
+    return String(qtdPessoas) + prefixo + numeroSequencial;
+  }
+
+  // Simples: ex.: R035
+  return prefixo + numeroSequencial;
+}
+
+function calcularStats(senhas) {
+  const stats = {
+    total: senhas.length,
+    aguardando: 0,
+    atendidas: 0,
+    ausentes: 0,
+  };
+
+  for (const s of senhas) {
+    if (s.status === "aguardando") stats.aguardando++;
+    else if (s.status === "atendida") stats.atendidas++;
+    else if (s.status === "ausente") stats.ausentes++;
+  }
+
+  return stats;
+}
+
+export default function handler(req, res) {
+  // CORS básico
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
+  const { ubs } = req.query;
+  if (!ubs) {
+    return res
+      .status(400)
+      .json({ ok: false, mensagem: "Parâmetro 'ubs' é obrigatório" });
+  }
+
+  const fila = ensureFila(ubs);
+
+  // GET: retorna a fila atual
+  if (req.method === "GET") {
+    const stats = calcularStats(fila.senhas);
+
+    return res.status(200).json({
+      ok: true,
+      ubs,
+      fila: fila.senhas,
+      stats,
+      ultimas_chamadas: fila.ultimasChamadas,
+    });
+  }
+
+  // POST: cria nova senha
+  if (req.method === "POST") {
+    let body = {};
+    try {
+      body = req.body || {};
+      if (typeof body === "string") {
+        body = JSON.parse(body);
+      }
+    } catch (e) {
+      body = {};
+    }
+
+    const servicoNome = body.servico_nome || "Atendimento Geral";
+    const preferencial = !!body.preferencial;
+
+    // Campos comerciais opcionais
+    const qtdPessoasBody =
+      typeof body.qtd_pessoas === "number" ? body.qtd_pessoas : null;
+
+    // tipo_senha:
+    // - se qtd_pessoas > 0 em unidade restaurante → "mesa"
+    // - senão → "simples"
+    const store = getStore();
+    const cfgBase = store.configPorUnidade[ubs] || {};
+    const recursos = cfgBase.recursos || {};
+    const segmento = cfgBase.segmento || "comercial";
+
+    let tipoSenha = "simples";
+    if (
+      segmento === "comercial" &&
+      recursos.mesas === true &&
+      typeof qtdPessoasBody === "number" &&
+      qtdPessoasBody > 0
+    ) {
+      tipoSenha = "mesa";
+    }
+
+    // Incrementa contador interno
+    fila.contador += 1;
+    const idInterno = fila.contador;
+
+    // Número visível com a nova regra
+    const numero = gerarNumeroVisivel(ubs, idInterno, qtdPessoasBody);
+    const agora = new Date();
+
+    const novaSenha = {
+      id: String(idInterno),
+      id_interno: idInterno,
+      numero,
+      servico_nome: servicoNome,
+      status: "aguardando",
+      preferencial,
+      criado_em: agora.toISOString(),
+
+      tipo_senha: tipoSenha,
+      qtd_pessoas: qtdPessoasBody,
+      mesas_solicitadas: null,
+      mesa_atribuida: null,
+      observacao_cliente: null,
+    };
+
+    fila.senhas.push(novaSenha);
+
+    const stats = calcularStats(fila.senhas);
+
+    return res.status(201).json({
+      ok: true,
+      mensagem: "Senha criada com sucesso",
+      ubs,
+      senha: novaSenha,
+      stats,
+    });
+  }
+
+  // Outros métodos não permitidos neste momento
+  return res
+    .status(405)
+    .json({ ok: false, mensagem: "Método não permitido" });
+}
